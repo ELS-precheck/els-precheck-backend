@@ -13,7 +13,12 @@ app = FastAPI(title="ELS 프리체크 API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://els-precheck-frontend.vercel.app",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.exception_handler(RequestValidationError)
