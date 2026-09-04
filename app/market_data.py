@@ -30,6 +30,13 @@ def _normalize(name: str) -> str:
     return name.upper().replace(" ", "").replace("_", "")
 
 
+def normalize_underlying(name: str) -> str:
+    return _normalize(name)
+
+
+SUPPORTED_UNDERLYINGS: frozenset[str] = frozenset(_VOL_TABLE.keys())
+
+
 def get_vol(underlyings: list[str]) -> list[float]:
     return [_VOL_TABLE.get(_normalize(n), DEFAULT_VOL) for n in underlyings]
 
