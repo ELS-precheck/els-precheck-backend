@@ -2,12 +2,12 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
-from app.ai import LLMError, generate_explanation
+from app.ai import ExtractionError, LLMError, extract_from_pdf, generate_explanation
 from app.engine import run_simulation
 from app.market_data import get_vol, get_corr
 from app.models import DiagnoseRequest, ExplainRequest
@@ -82,6 +82,24 @@ def health():
 @app.get("/api/presets")
 def presets():
     return ok({"presets": get_presets()})
+
+
+@app.post("/api/extract")
+async def extract(file: UploadFile = File(...)):
+    if file.content_type != "application/pdf" and not (file.filename or "").endswith(".pdf"):
+        return fail("UNSUPPORTED_FILE", "PDF 파일만 업로드할 수 있어요.", "file", status=415)
+
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        return fail("FILE_TOO_LARGE", "10MB 이하 PDF만 올릴 수 있어요.", "file", status=413)
+
+    try:
+        result = extract_from_pdf(content)
+    except ExtractionError:
+        return fail("EXTRACTION_FAILED",
+                    "설명서에서 조건을 읽지 못했어요. 직접 입력으로 진행해 주세요.",
+                    None, status=422)
+    return ok(result)
 
 
 @app.post("/api/explain")

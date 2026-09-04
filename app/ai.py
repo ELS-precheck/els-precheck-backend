@@ -1,10 +1,13 @@
-"""Claude API 연동 — 해설 생성"""
+"""Claude API 연동 — PDF 추출 + 해설 생성"""
 from __future__ import annotations
+import base64
 import json
 import logging
 import os
 
 import anthropic
+
+from app.market_data import SUPPORTED_UNDERLYINGS, normalize_underlying
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +28,10 @@ def _get_client() -> anthropic.Anthropic:
 
 
 class LLMError(Exception):
+    pass
+
+
+class ExtractionError(Exception):
     pass
 
 
@@ -161,3 +168,146 @@ def generate_explanation(els_terms: dict, diagnosis: dict, user_profile: dict | 
 
     result.setdefault("disclaimer", "본 해설은 투자권유가 아니라 정보 제공입니다.")
     return _filter_prohibited(result)
+
+
+# ---------- PDF 추출 ----------
+
+_EXTRACT_SYSTEM = (
+    "당신은 ELS(주가연계증권) 상품설명서에서 핵심 조건을 정확히 추출하는 전문가입니다. "
+    "문서에 명시된 내용만 사용하고, 없는 수치를 만들어 내지 마세요."
+)
+
+_EXTRACT_TOOL = {
+    "name": "extract_els_terms",
+    "description": "ELS 상품설명서 PDF에서 추출한 조건을 구조화된 형태로 반환합니다.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "els_terms": {
+                "type": "object",
+                "properties": {
+                    "underlyings": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "기초자산 이름 배열 (영문 표준명: S&P500, KOSPI200, EUROSTOXX50 등)",
+                    },
+                    "coupon_annual": {"type": "number", "description": "연 쿠폰 소수 (8% → 0.08)"},
+                    "maturity_months": {"type": "integer", "description": "만기 개월 수"},
+                    "check_interval_months": {"type": "integer", "description": "점검 주기 개월 수"},
+                    "step_down_barriers": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "점검일별 조기상환 배리어 소수 배열 (90% → 0.90)",
+                    },
+                    "knock_in": {
+                        "type": ["number", "null"],
+                        "description": "낙인선 소수 (50% → 0.50). 낙인 없으면 null",
+                    },
+                    "principal": {
+                        "type": ["integer", "null"],
+                        "description": "투자 원금 원 단위. 문서에 명시된 경우만 기입, 없으면 null.",
+                    },
+                },
+                "required": [
+                    "underlyings", "coupon_annual", "maturity_months",
+                    "check_interval_months", "step_down_barriers", "knock_in",
+                ],
+            },
+            "confidence": {
+                "type": "object",
+                "properties": {
+                    "underlyings": {"type": "number"},
+                    "coupon_annual": {"type": "number"},
+                    "maturity_months": {"type": "number"},
+                    "step_down_barriers": {"type": "number"},
+                    "knock_in": {"type": "number"},
+                },
+                "description": "필드별 추출 신뢰도 (0~1). 불확실할수록 낮게.",
+            },
+            "warnings": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "사람이 확인해야 할 항목 안내 문구 배열. 없으면 빈 배열.",
+            },
+        },
+        "required": ["els_terms", "confidence", "warnings"],
+    },
+}
+
+_EXTRACT_PROMPT = (
+    "첨부된 ELS 상품설명서 PDF를 분석하여 조건을 추출하세요. "
+    "문서에 없는 값은 만들지 말고, 불확실한 항목은 confidence를 낮게 설정하고 warnings에 안내 문구를 추가하세요."
+)
+
+_NORMALIZED_SUPPORTED = {normalize_underlying(u) for u in SUPPORTED_UNDERLYINGS}
+
+
+def _sanity_check(terms: dict, warnings: list[str]) -> None:
+    """추출 수치 범위 및 정합성 검증. 이상 항목은 warnings에 추가."""
+    if not (0 < terms.get("coupon_annual", 0) < 1):
+        warnings.append("연 쿠폰율 값을 확인해 주세요 (소수 형식 0~1 범위를 벗어남).")
+    for b in terms.get("step_down_barriers", []):
+        if not (0 < b <= 1.5):
+            warnings.append("조기상환 배리어 값을 확인해 주세요 (소수 형식 0~1.5 범위를 벗어남).")
+            break
+    ki = terms.get("knock_in")
+    if ki is not None and not (0 < ki < 1):
+        warnings.append("낙인선 값을 확인해 주세요 (소수 형식 0~1 범위를 벗어남).")
+    maturity = terms.get("maturity_months", 0)
+    interval = terms.get("check_interval_months", 0)
+    if maturity <= 0 or interval <= 0:
+        warnings.append("만기·점검주기 값을 확인해 주세요.")
+    else:
+        expected = maturity // interval
+        actual = len(terms.get("step_down_barriers", []))
+        if actual != expected:
+            warnings.append(
+                f"조기상환 배리어 개수({actual}개)가 점검 횟수({expected}회)와 맞지 않습니다."
+            )
+    unknown = [
+        u for u in terms.get("underlyings", [])
+        if normalize_underlying(u) not in _NORMALIZED_SUPPORTED
+    ]
+    if unknown:
+        warnings.append(f"인식되지 않은 기초자산이 있습니다. 확인해 주세요: {', '.join(unknown)}")
+
+
+def extract_from_pdf(pdf_bytes: bytes) -> dict:
+    """PDF에서 ELS 조건 추출. 실패 시 ExtractionError 발생."""
+    try:
+        b64 = base64.standard_b64encode(pdf_bytes).decode()
+        msg = _get_client().messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            timeout=30.0,
+            system=_EXTRACT_SYSTEM,
+            tools=[_EXTRACT_TOOL],
+            tool_choice={"type": "tool", "name": "extract_els_terms"},
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+                    },
+                    {"type": "text", "text": _EXTRACT_PROMPT},
+                ],
+            }],
+        )
+        tool_block = next(b for b in msg.content if b.type == "tool_use")
+        result = tool_block.input
+    except (anthropic.APIError, TypeError) as e:
+        raise ExtractionError(str(e)) from e
+    except StopIteration as e:
+        raise ExtractionError("응답에서 추출 데이터를 찾을 수 없습니다.") from e
+
+    result.setdefault("confidence", {})
+    result.setdefault("warnings", [])
+
+    els_terms = result.get("els_terms")
+    if not isinstance(els_terms, dict):
+        raise ExtractionError("els_terms 필드가 올바르지 않습니다.")
+    els_terms.setdefault("principal", 10_000_000)
+
+    _sanity_check(els_terms, result["warnings"])
+    return result
