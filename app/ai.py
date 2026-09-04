@@ -301,15 +301,21 @@ def extract_from_pdf(pdf_bytes: bytes) -> dict:
     except StopIteration as e:
         raise ExtractionError("응답에서 추출 데이터를 찾을 수 없습니다.") from e
 
-    confidence = result.get("confidence")
-    result["confidence"] = confidence if isinstance(confidence, dict) else {}
-    warnings = result.get("warnings")
-    result["warnings"] = warnings if isinstance(warnings, list) else []
+    try:
+        confidence = result.get("confidence")
+        result["confidence"] = confidence if isinstance(confidence, dict) else {}
+        warnings = result.get("warnings")
+        result["warnings"] = warnings if isinstance(warnings, list) else []
 
-    els_terms = result.get("els_terms")
-    if not isinstance(els_terms, dict):
-        raise ExtractionError("els_terms 필드가 올바르지 않습니다.")
-    els_terms.setdefault("principal", None)
+        els_terms = result.get("els_terms")
+        if not isinstance(els_terms, dict):
+            raise ExtractionError("ELS 조건을 추출할 수 없는 문서입니다.")
+        els_terms.setdefault("principal", None)
 
-    _sanity_check(els_terms, result["warnings"])
+        _sanity_check(els_terms, result["warnings"])
+    except ExtractionError:
+        raise
+    except Exception as e:
+        raise ExtractionError("ELS 조건을 추출할 수 없는 문서입니다.") from e
+
     return result
