@@ -74,7 +74,7 @@ def run_simulation(
     r: float = 0.032,
     num_paths: int = 100000,
     seed: int = 0,
-    chunk_size: int = 20000,
+    chunk_size: int = 5000,
 ) -> dict:
     """한 번의 진단 → 명세(/api/diagnose)의 data 필드 전부 반환."""
     t0 = time.perf_counter()
