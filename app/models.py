@@ -106,13 +106,23 @@ class UserProfile(BaseModel):
         return v
 
 
+class DiagnosisSummary(BaseModel):
+    model_config = {"extra": "forbid"}
+    loss_probability: float
+    grade: str
+    expected_return: float
+    promised_coupon_annual: float
+    cvar_95: float
+    early_redemption_probability: float | None = None
+    outcome_split: dict | None = None
+    early_redemption_by_step: list | None = None
+    return_distribution: dict | None = None
+    principal: int | None = None
+    expected_return_amount: int | None = None
+    meta: dict | None = None
+
+
 class ExplainRequest(BaseModel):
     els_terms: ElsTerms
-    diagnosis: dict
+    diagnosis: DiagnosisSummary
     user_profile: UserProfile | None = None
-
-    @model_validator(mode="after")
-    def _check_diagnosis(self):
-        if not self.diagnosis:
-            raise ValueError("진단 결과(diagnosis)가 필요합니다.")
-        return self

@@ -90,7 +90,7 @@ def explain(req: ExplainRequest):
     try:
         result = generate_explanation(
             els_terms=req.els_terms.model_dump(),
-            diagnosis=req.diagnosis,
+            diagnosis=req.diagnosis.model_dump(),
             user_profile=profile,
         )
     except LLMError:

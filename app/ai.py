@@ -34,13 +34,15 @@ _FALLBACK_EXPLANATION = "진단 수치를 바탕으로 위험 구조를 직접 �
 
 def _as_list(v) -> list[str]:
     if isinstance(v, list):
-        return v
+        return [s for s in v if isinstance(s, str)]
     if isinstance(v, str):
         return [v]
     return []
 
 
 def _find_keyword(text: str) -> str | None:
+    if not isinstance(text, str):
+        return None
     return next((k for k in _PROHIBITED if k in text), None)
 
 
@@ -152,7 +154,7 @@ def generate_explanation(els_terms: dict, diagnosis: dict, user_profile: dict | 
         )
         tool_block = next(b for b in msg.content if b.type == "tool_use")
         result = tool_block.input
-    except anthropic.APIError as e:
+    except (anthropic.APIError, TypeError) as e:
         raise LLMError(str(e)) from e
     except StopIteration as e:
         raise LLMError("응답에서 해설 데이터를 찾을 수 없습니다.") from e
