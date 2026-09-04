@@ -301,8 +301,10 @@ def extract_from_pdf(pdf_bytes: bytes) -> dict:
     except StopIteration as e:
         raise ExtractionError("응답에서 추출 데이터를 찾을 수 없습니다.") from e
 
-    result.setdefault("confidence", {})
-    result.setdefault("warnings", [])
+    confidence = result.get("confidence")
+    result["confidence"] = confidence if isinstance(confidence, dict) else {}
+    warnings = result.get("warnings")
+    result["warnings"] = warnings if isinstance(warnings, list) else []
 
     els_terms = result.get("els_terms")
     if not isinstance(els_terms, dict):
