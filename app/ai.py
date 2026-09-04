@@ -309,7 +309,7 @@ def extract_from_pdf(pdf_bytes: bytes) -> dict:
     els_terms = result.get("els_terms")
     if not isinstance(els_terms, dict):
         raise ExtractionError("els_terms 필드가 올바르지 않습니다.")
-    els_terms.setdefault("principal", 10_000_000)
+    els_terms.setdefault("principal", None)
 
     _sanity_check(els_terms, result["warnings"])
     return result
