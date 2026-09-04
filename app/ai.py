@@ -310,6 +310,14 @@ def extract_from_pdf(pdf_bytes: bytes) -> dict:
         els_terms = result.get("els_terms")
         if not isinstance(els_terms, dict):
             raise ExtractionError("ELS 조건을 추출할 수 없는 문서입니다.")
+        # Claude가 confidence/warnings를 els_terms 안에 중첩 반환하는 경우 정규화
+        if "els_terms" in els_terms:
+            result["confidence"] = els_terms.get("confidence", result["confidence"])
+            result["warnings"] = els_terms.get("warnings", result["warnings"])
+            els_terms = els_terms["els_terms"]
+            result["els_terms"] = els_terms
+        if not isinstance(els_terms, dict):
+            raise ExtractionError("ELS 조건을 추출할 수 없는 문서입니다.")
         els_terms.setdefault("principal", None)
 
         _sanity_check(els_terms, result["warnings"])
