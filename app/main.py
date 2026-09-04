@@ -1,12 +1,16 @@
 """ELS 프리체크 백엔드 (FastAPI)"""
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
+from app.ai import LLMError, generate_explanation
 from app.engine import run_simulation
 from app.market_data import get_vol, get_corr
-from app.models import DiagnoseRequest
+from app.models import DiagnoseRequest, ExplainRequest
 from app.presets import get_presets
 
 app = FastAPI(title="ELS 프리체크 API")
@@ -78,6 +82,22 @@ def health():
 @app.get("/api/presets")
 def presets():
     return ok({"presets": get_presets()})
+
+
+@app.post("/api/explain")
+def explain(req: ExplainRequest):
+    profile = req.user_profile.model_dump() if req.user_profile else None
+    try:
+        result = generate_explanation(
+            els_terms=req.els_terms.model_dump(),
+            diagnosis=req.diagnosis.model_dump(),
+            user_profile=profile,
+        )
+    except LLMError:
+        return fail("LLM_UNAVAILABLE",
+                    "해설을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+                    None, status=503)
+    return ok(result)
 
 
 @app.post("/api/diagnose")
