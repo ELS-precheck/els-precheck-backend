@@ -18,10 +18,9 @@ app.add_middleware(
 
 @app.exception_handler(RequestValidationError)
 def on_invalid(request: Request, exc: RequestValidationError):
-    err = exc.errors()[0]                      # 첫 번째 에러만 사용
-    msg = err.get("msg", "입력값을 확인해 주세요.")
+    err = exc.errors()[0]
     field = err["loc"][-1] if err.get("loc") else None
-    return fail("INVALID_INPUT", str(msg), str(field), status=400)
+    return fail("INVALID_INPUT", _to_korean(err), str(field), status=400)
 
 
 # ---------- 공통 봉투 헬퍼 ----------
@@ -35,6 +34,28 @@ def fail(code: str, message: str, field=None, status: int = 400) -> JSONResponse
         content={"ok": False, "error": {"code": code, "message": message, "field": field}},
     )
 
+# ---------- 검증 오류 ----------
+_FIELD_MSG = {
+    "num_paths": "경로 수는 1,000에서 200,000 사이여야 합니다.",
+    "volatility_scale": "변동성 배수 값이 올바르지 않습니다.",
+    "knock_in": "낙인선은 30~100% 사이여야 합니다.",
+}
+
+
+def _to_korean(err: dict) -> str:
+    etype = err.get("type", "")
+    field = err["loc"][-1] if err.get("loc") else None
+    # 우리가 만든 검증(ValueError)은 이미 한국어 → "Value error, " 접두어만 제거
+    if etype == "value_error":
+        return err.get("msg", "").replace("Value error, ", "", 1)
+    if etype == "extra_forbidden":
+        return "허용되지 않는 항목이 포함되어 있습니다."
+    if etype == "missing":
+        return "필수 항목이 빠졌습니다."
+    if field in _FIELD_MSG:
+        return _FIELD_MSG[field]
+    return "입력값을 확인해 주세요."
+
 
 # ---------- 전역 예외 핸들러: 어떤 에러든 봉투로 ----------
 @app.exception_handler(Exception)
@@ -44,9 +65,9 @@ def on_error(request: Request, exc: Exception):
                 None, status=500)
 
 
-@app.get("/")
-def root():
-    return ok({"service": "ELS 프리체크 API", "status": "running"})
+@app.get("/api/health")
+def health():
+    return ok({"status": "healthy"})
 
 
 @app.get("/api/presets")
@@ -57,23 +78,19 @@ def presets():
 @app.post("/api/diagnose")
 def diagnose(req: DiagnoseRequest):
     t = req.els_terms
-    ov = req.overrides or {}
 
     # 1) 이 기초자산들의 변동성·상관 구하기
     vol = get_vol(t.underlyings)
     corr = get_corr(t.underlyings)
 
-    # 2) '조건 바꿔보기' 슬라이더: 변동성 배수 반영
-    scale = ov.get("volatility_scale", 1.0)
+    # 2) overrides(조건 바꿔보기) 반영  ← 여기가 바뀐 부분
+    ov = req.overrides
+    scale = ov.volatility_scale if ov else 1.0
     vol = [v * scale for v in vol]
-
-    # 3) 낙인 슬라이더가 왔으면 덮어쓰기
-    knock_in = ov.get("knock_in", t.knock_in)
-
-    # 4) 경로 수: 안 주면 10만
+    knock_in = ov.knock_in if (ov and ov.knock_in is not None) else t.knock_in
     num_paths = req.num_paths or 100000
 
-    # 5) 엔진 호출
+    # 3) 엔진 호출
     result = run_simulation(
         underlyings=t.underlyings,
         coupon_annual=t.coupon_annual,

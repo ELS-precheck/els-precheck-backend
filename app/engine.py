@@ -103,7 +103,9 @@ def run_simulation(
             vol_arr=vol_arr, L=L, r=r, coupon_annual=coupon_annual,
             step_down_barriers=step_down_barriers, knock_in=knock_in, rng=rng,
         )
-        payoff_parts.append(p); rtime_parts.append(rt); step_parts.append(rs)
+        payoff_parts.append(p)
+        rtime_parts.append(rt)
+        step_parts.append(rs)
         remaining -= n
 
     payoff = np.concatenate(payoff_parts)

@@ -1,6 +1,10 @@
 """요청/응답 모델 + 입력 검증 (명세 0-6 규칙)"""
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+class Overrides(BaseModel):
+    model_config = {"extra": "forbid"}
+    volatility_scale: float = Field(default=1.0, gt=0, le=5.0)
+    knock_in: float | None = Field(default=None, ge=0.3, le=1.0)
 
 class ElsTerms(BaseModel):
     underlyings: list[str]
@@ -79,5 +83,5 @@ class ElsTerms(BaseModel):
 
 class DiagnoseRequest(BaseModel):
     els_terms: ElsTerms
-    overrides: dict | None = None
-    num_paths: int | None = None
+    overrides: Overrides | None = None
+    num_paths: int | None = Field(default=None, ge=1000, le=200000)
