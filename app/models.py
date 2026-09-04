@@ -85,3 +85,34 @@ class DiagnoseRequest(BaseModel):
     els_terms: ElsTerms
     overrides: Overrides | None = None
     num_paths: int | None = Field(default=None, ge=1000, le=200000)
+
+
+class UserProfile(BaseModel):
+    age_band: str | None = None
+    risk_appetite: str | None = None
+
+    @field_validator("age_band")
+    @classmethod
+    def _check_age_band(cls, v):
+        if v is not None and v not in {"20_30s", "40_50s", "60s_plus"}:
+            raise ValueError("age_band 값이 올바르지 않습니다.")
+        return v
+
+    @field_validator("risk_appetite")
+    @classmethod
+    def _check_risk_appetite(cls, v):
+        if v is not None and v not in {"conservative", "neutral", "aggressive"}:
+            raise ValueError("risk_appetite 값이 올바르지 않습니다.")
+        return v
+
+
+class ExplainRequest(BaseModel):
+    els_terms: ElsTerms
+    diagnosis: dict
+    user_profile: UserProfile | None = None
+
+    @model_validator(mode="after")
+    def _check_diagnosis(self):
+        if not self.diagnosis:
+            raise ValueError("진단 결과(diagnosis)가 필요합니다.")
+        return self
