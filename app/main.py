@@ -1,6 +1,13 @@
-"""ELS 프리체크 백엔드 (FastAPI) — 스켈레톤"""
-from fastapi import FastAPI
+"""ELS 프리체크 백엔드 (FastAPI)"""
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+
+from app.engine import run_simulation
+from app.market_data import get_vol, get_corr
+from app.models import DiagnoseRequest
+from app.presets import get_presets
 
 app = FastAPI(title="ELS 프리체크 API")
 
@@ -9,17 +16,91 @@ app.add_middleware(
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
+@app.exception_handler(RequestValidationError)
+def on_invalid(request: Request, exc: RequestValidationError):
+    err = exc.errors()[0]
+    field = err["loc"][-1] if err.get("loc") else None
+    return fail("INVALID_INPUT", _to_korean(err), str(field), status=400)
 
-@app.get("/")
-def root():
-    return {"ok": True, "data": {"service": "ELS 프리체크 API", "status": "running"}}
+
+# ---------- 공통 봉투 헬퍼 ----------
+def ok(data: dict) -> dict:
+    return {"ok": True, "data": data}
+
+
+def fail(code: str, message: str, field=None, status: int = 400) -> JSONResponse:
+    return JSONResponse(
+        status_code=status,
+        content={"ok": False, "error": {"code": code, "message": message, "field": field}},
+    )
+
+# ---------- 검증 오류 ----------
+_FIELD_MSG = {
+    "num_paths": "경로 수는 1,000에서 200,000 사이여야 합니다.",
+    "volatility_scale": "변동성 배수 값이 올바르지 않습니다.",
+    "knock_in": "낙인선은 30~100% 사이여야 합니다.",
+}
+
+
+def _to_korean(err: dict) -> str:
+    etype = err.get("type", "")
+    field = err["loc"][-1] if err.get("loc") else None
+    # 우리가 만든 검증(ValueError)은 이미 한국어 → "Value error, " 접두어만 제거
+    if etype == "value_error":
+        return err.get("msg", "").replace("Value error, ", "", 1)
+    if etype == "extra_forbidden":
+        return "허용되지 않는 항목이 포함되어 있습니다."
+    if etype == "missing":
+        return "필수 항목이 빠졌습니다."
+    if field in _FIELD_MSG:
+        return _FIELD_MSG[field]
+    return "입력값을 확인해 주세요."
+
+
+# ---------- 전역 예외 핸들러: 어떤 에러든 봉투로 ----------
+@app.exception_handler(Exception)
+def on_error(request: Request, exc: Exception):
+    return fail("INTERNAL",
+                "문제가 발생했어요. 계속되면 잠시 후 다시 시도해 주세요.",
+                None, status=500)
+
+
+@app.get("/api/health")
+def health():
+    return ok({"status": "healthy"})
 
 
 @app.get("/api/presets")
 def presets():
-    return {"ok": True, "data": {"presets": []}}
+    return ok({"presets": get_presets()})
 
 
 @app.post("/api/diagnose")
-def diagnose(body: dict):
-    return {"ok": True, "data": {"loss_probability": 0.0, "grade": "중위험"}}
+def diagnose(req: DiagnoseRequest):
+    t = req.els_terms
+
+    # 1) 이 기초자산들의 변동성·상관 구하기
+    vol = get_vol(t.underlyings)
+    corr = get_corr(t.underlyings)
+
+    # 2) overrides(조건 바꿔보기) 반영  ← 여기가 바뀐 부분
+    ov = req.overrides
+    scale = ov.volatility_scale if ov else 1.0
+    vol = [v * scale for v in vol]
+    knock_in = ov.knock_in if (ov and ov.knock_in is not None) else t.knock_in
+    num_paths = req.num_paths or 100000
+
+    # 3) 엔진 호출
+    result = run_simulation(
+        underlyings=t.underlyings,
+        coupon_annual=t.coupon_annual,
+        maturity_months=t.maturity_months,
+        check_interval_months=t.check_interval_months,
+        step_down_barriers=t.step_down_barriers,
+        knock_in=knock_in,
+        principal=t.principal,
+        vol=vol,
+        corr=corr,
+        num_paths=num_paths,
+    )
+    return ok(result)
