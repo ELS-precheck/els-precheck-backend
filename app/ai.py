@@ -197,7 +197,7 @@ _EXTRACT_TOOL = {
                     "step_down_barriers": {
                         "type": "array",
                         "items": {"type": "number"},
-                        "description": "점검일별 조기상환 배리어 소수 배열 (90% → 0.90)",
+                        "description": "모든 관찰일의 배리어를 순서대로 담은 소수 배열 (90% → 0.90). 조기상환 배리어 뒤에 만기 상환 배리어를 마지막 원소로 반드시 포함한다. 배열 길이 = 만기 ÷ 점검주기이며, 마지막 값이 만기 배리어다.",
                     },
                     "knock_in": {
                         "type": ["number", "null"],
