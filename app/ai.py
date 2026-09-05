@@ -257,6 +257,12 @@ def _sanity_check(terms: dict, warnings: list[str]) -> None:
         if not (0 < b <= 1.5):
             warnings.append("조기상환 배리어 값을 확인해 주세요 (소수 형식 0~1.5 범위를 벗어남).")
             break
+    vol = terms.get("vol")
+    if vol is not None:
+        if len(vol) != len(terms.get("underlyings", [])):
+            warnings.append("추출된 변동성 개수가 기초자산 개수와 다릅니다. 확인해 주세요.")
+        elif any(not (0 < v <= 3.0) for v in vol):
+            warnings.append("추출된 변동성 값이 유효 범위를 벗어났습니다. 확인해 주세요.")
     ki = terms.get("knock_in")
     if ki is not None and not (0 < ki < 1):
         warnings.append("낙인선 값을 확인해 주세요 (소수 형식 0~1 범위를 벗어남).")

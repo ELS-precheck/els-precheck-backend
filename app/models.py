@@ -88,8 +88,20 @@ class ElsTerms(BaseModel):
             if any(not (0 < v <= 3.0) for v in self.vol):
                 raise ValueError("변동성 값이 올바르지 않습니다.")
         if self.corr is not None:
-            if len(self.corr) != na or any(len(row) != na for row in self.corr):
+            import numpy as np
+            m = np.array(self.corr, dtype=float)
+            if m.shape != (na, na):
                 raise ValueError("상관계수 행렬 크기가 기초자산 개수와 맞지 않습니다.")
+            if not np.allclose(m, m.T):
+                raise ValueError("상관계수 행렬이 대칭이 아닙니다.")
+            if not np.allclose(np.diag(m), 1.0):
+                raise ValueError("상관계수 대각선은 1이어야 합니다.")
+            if np.any(m < -1) or np.any(m > 1):
+                raise ValueError("상관계수는 -1~1 사이여야 합니다.")
+            try:
+                np.linalg.cholesky(m)
+            except np.linalg.LinAlgError:
+                raise ValueError("유효하지 않은 상관행렬입니다.")
         return self
 
 
