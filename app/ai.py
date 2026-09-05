@@ -175,6 +175,8 @@ def generate_explanation(els_terms: dict, diagnosis: dict, user_profile: dict | 
 _EXTRACT_SYSTEM = (
     "당신은 ELS(주가연계증권) 상품설명서에서 핵심 조건을 정확히 추출하는 전문가입니다. "
     "문서에 명시된 내용만 사용하고, 없는 수치를 만들어 내지 마세요."
+    "'이론가격 산출에 사용한 변동성' 표에 값이 있으면 vol로 추출하고, 없으면 null로 둡니다. "
+    "step_down_barriers에는 만기 배리어까지 포함해 관찰 횟수만큼 넣습니다."
 )
 
 _EXTRACT_TOOL = {
@@ -198,6 +200,11 @@ _EXTRACT_TOOL = {
                         "type": "array",
                         "items": {"type": "number"},
                         "description": "모든 관찰일의 배리어를 순서대로 담은 소수 배열 (90% → 0.90). 조기상환 배리어 뒤에 만기 상환 배리어를 마지막 원소로 반드시 포함한다. 배열 길이 = 만기 ÷ 점검주기이며, 마지막 값이 만기 배리어다.",
+                    },
+                    "vol": {
+                        "type": ["array", "null"],
+                        "items": {"type": "number"},
+                        "description": "기초자산별 내재변동성 소수 배열 (36.29% → 0.3629). 설명서의 '이론가격 산출에 사용한 변동성' 또는 '기초자산 가격 변동성' 표에서 추출한다. 기초자산 순서와 일치. 문서에 없으면 null.",
                     },
                     "knock_in": {
                         "type": ["number", "null"],
