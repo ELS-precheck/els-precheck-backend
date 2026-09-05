@@ -14,6 +14,8 @@ class ElsTerms(BaseModel):
     step_down_barriers: list[float]
     knock_in: float | None = None
     principal: int = 10_000_000
+    vol: list[float] | None = None
+    corr: list[list[float]] | None = None
 
     # 기초자산: 1~3개, 빈 문자열 불가
     @field_validator("underlyings")
@@ -78,6 +80,16 @@ class ElsTerms(BaseModel):
         # 각 배리어 0.3 ~ 1.2
         if any(not (0.3 <= b <= 1.2) for b in self.step_down_barriers):
             raise ValueError("배리어 값은 30~120% 사이여야 합니다.")
+        # 변동성·상관: 주어졌으면 기초자산 개수와 크기가 맞아야 함
+        na = len(self.underlyings)
+        if self.vol is not None:
+            if len(self.vol) != na:
+                raise ValueError("변동성 개수가 기초자산 개수와 다릅니다.")
+            if any(not (0 < v <= 3.0) for v in self.vol):
+                raise ValueError("변동성 값이 올바르지 않습니다.")
+        if self.corr is not None:
+            if len(self.corr) != na or any(len(row) != na for row in self.corr):
+                raise ValueError("상관계수 행렬 크기가 기초자산 개수와 맞지 않습니다.")
         return self
 
 

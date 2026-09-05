@@ -131,9 +131,9 @@ def explain(req: ExplainRequest):
 def diagnose(req: DiagnoseRequest):
     t = req.els_terms
 
-    # 1) 이 기초자산들의 변동성·상관 구하기
-    vol = get_vol(t.underlyings)
-    corr = get_corr(t.underlyings)
+    # 1) 변동성·상관: 요청에 있으면 그걸 쓰고, 없으면 서버 기본값(market_data)
+    vol = t.vol if t.vol else get_vol(t.underlyings)
+    corr = t.corr if t.corr else get_corr(t.underlyings)
 
     # 2) overrides(조건 바꿔보기) 반영  ← 여기가 바뀐 부분
     ov = req.overrides
