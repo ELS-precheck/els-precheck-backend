@@ -22,9 +22,20 @@ SUPPORTED_UNDERLYINGS = {
     "TESLA", "TSLA", "NVIDIA", "NVDA",
 }
 
+# CSV 헤더와 동일한 표준 자산명으로 매핑 (대문자·공백/언더스코어 제거 후 조회)
+_ALIAS = {
+    "KOSPI200": "KOSPI200", "KOSPI": "KOSPI200",
+    "S&P500": "S&P500", "SPX": "S&P500", "S&P": "S&P500",
+    "EUROSTOXX50": "EUROSTOXX50", "SX5E": "EUROSTOXX50",
+    "NIKKEI225": "NIKKEI225", "NKY": "NIKKEI225", "NIKKEI": "NIKKEI225",
+    "HSCEI": "HSCEI", "H지수": "HSCEI", "HSCEI지수": "HSCEI",
+    "TESLA": "TESLA", "TSLA": "TESLA",
+    "NVIDIA": "NVIDIA", "NVDA": "NVIDIA",
+}
 
 def _normalize(name: str) -> str:
-    return name.upper().replace(" ", "").replace("_", "")
+    key = name.upper().replace(" ", "").replace("_", "")
+    return _ALIAS.get(key, key)  # 별칭이면 표준명, 아니면 정리된 원본
 
 def normalize_underlying(name: str) -> str:
     """외부(ai.py 등)에서 쓰는 공개 정규화 함수."""

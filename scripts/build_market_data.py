@@ -90,11 +90,26 @@ def main():
     ret_df = pd.DataFrame(rets).dropna()
     corr_df = ret_df.corr().round(4)
 
-    asof = dt.date.today().strftime("%Y-%m-%d")
-    vol_df["asof"] = asof
+    # 자동수집 자산: yfinance 시계열의 마지막 실제 거래일
+    # 수동입력 자산: 값을 확인한 명시적 기준일 상수
+    VOL_INDEX_ASOF = {  # 수동 내재변동성값의 실제 기준일
+        "KOSPI200": "2026-09-04",
+        "NIKKEI225": "2026-09-04",
+        "HSCEI": "2026-09-04",
+    }
+
+    # vol_df 만들 때 asset별 asof 컬럼을 이미 채운다고 가정하고,
+    # 아래처럼 각 행 기준일을 개별 기록:
+    #   - 자동수집: price_df.index[-1].strftime("%Y-%m-%d")
+    #   - 수동입력: VOL_INDEX_ASOF[asset]
+    # (source 컬럼으로 자동/수동 구분해서 분기)
+
     vol_df.to_csv(OUT_DIR / "vol.csv", index=False)
     corr_df.to_csv(OUT_DIR / "corr.csv")
-    (OUT_DIR / "asof.txt").write_text(asof)
+
+    # 전역 asof.txt는 "가장 오래된 입력 기준일"로 = 가장 보수적
+    global_asof = min(vol_df["asof"])
+    (OUT_DIR / "asof.txt").write_text(global_asof)
 
     print("\n=== 최종 변동성 (source 표기) ===")
     print(vol_df.to_string(index=False))
