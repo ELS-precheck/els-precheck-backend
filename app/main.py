@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 
 from app.ai import ExtractionError, LLMError, extract_from_pdf, generate_explanation
 from app.engine import run_simulation
-from app.market_data import get_vol, get_corr
+from app.market_data import get_vol, get_corr, get_asof
 from app.models import DiagnoseRequest, ExplainRequest
 from app.presets import get_presets
 
@@ -155,4 +155,5 @@ def diagnose(req: DiagnoseRequest):
         corr=corr,
         num_paths=num_paths,
     )
+    result.setdefault("meta", {})["data_asof"] = get_asof()
     return ok(result)
