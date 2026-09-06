@@ -81,6 +81,18 @@ def get_vol(underlyings: list[str]) -> list[float]:
     """CSV(내재/실현변동성) 우선, 없으면 자산군별 보수적 기본값."""
     return [_VOL.get(_normalize(n), _default_vol(n)) for n in underlyings]
 
+def vol_warnings(underlyings: list[str]) -> list[dict]:
+    """CSV에 실측 변동성이 없어 보수적 기본값으로 진단된 자산 목록.
+    (요청에 vol이 실려온 경우는 main.py에서 애초에 호출하지 않음)"""
+    warns = []
+    for n in underlyings:
+        if _normalize(n) not in _VOL:
+            warns.append({
+                "asset": n,
+                "vol": _default_vol(n),
+                "message": "실측 변동성 데이터가 없어 보수적 기본값으로 진단했습니다.",
+            })
+    return warns
 
 def get_corr(underlyings: list[str], pair_corr: float = DEFAULT_PAIR_CORR) -> list[list[float]]:
     """모든 자산이 CSV에 있으면 실데이터 부분행렬(유효한 상관행렬),
