@@ -10,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 
 from app.ai import ExtractionError, LLMError, extract_from_pdf, generate_explanation
 from app.engine import run_simulation
-from app.market_data import get_vol, get_corr, get_asof
+from app.market_data import get_vol, get_corr, get_asof, vol_warnings
 from app.models import DiagnoseRequest, ExplainRequest
 from app.presets import get_presets
 
@@ -136,6 +136,9 @@ def diagnose(req: DiagnoseRequest):
     vol = t.vol if t.vol else get_vol(t.underlyings)
     corr = t.corr if t.corr else get_corr(t.underlyings)
 
+    # 요청에 vol이 없어 서버가 채운 경우에만, 기본값으로 떨어진 자산을 경고
+    warnings = [] if t.vol else vol_warnings(t.underlyings)
+
     # 2) overrides(조건 바꿔보기) 반영  ← 여기가 바뀐 부분
     ov = req.overrides
     scale = ov.volatility_scale if ov else 1.0
@@ -156,5 +159,7 @@ def diagnose(req: DiagnoseRequest):
         corr=corr,
         num_paths=num_paths,
     )
+
     result.setdefault("meta", {})["data_asof"] = get_asof()
+    result["meta"]["vol_warnings"] = warnings
     return ok(result)
