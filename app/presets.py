@@ -24,12 +24,15 @@ _PRESET_META = [
 
     {"id": "hscei2021", "label": "홍콩 H지수 ELS (2021년형)",
      "one_line": "2021년 대량 판매돼 2024년 대규모 원금손실이 난 실제 구조. 발행 시점 시장으로 재현",
-     "data_note": "2021년 상반기 발행 당시 시장 변동성 기준(근사)",
+     "data_note": "2021년 상반기 발행 당시 시장 변동성·상관 기준(근사)",
      "els_terms": {"underlyings": ["HSCEI", "S&P500", "EUROSTOXX50"], "coupon_annual": 0.065,
-         "maturity_months": 36, "check_interval_months": 6,
-         "step_down_barriers": [0.90, 0.90, 0.85, 0.85, 0.80, 0.65],
-         "knock_in": 0.50, "principal": 10_000_000,
-         "vol": [0.28, 0.22, 0.22]}},   # 2021 상반기 발행 당시 내재변동성(근사)
+                   "maturity_months": 36, "check_interval_months": 6,
+                   "step_down_barriers": [0.90, 0.90, 0.85, 0.85, 0.80, 0.65],
+                   "knock_in": 0.50, "principal": 10_000_000,
+                   "vol": [0.28, 0.22, 0.22],
+                   "corr": [[1.0, 0.55, 0.55],  # 2021 발행 당시 크로스리전 상관(근사)
+                            [0.55, 1.0, 0.55],
+                            [0.55, 0.55, 1.0]]}},
 ]
 
 _cache = None
