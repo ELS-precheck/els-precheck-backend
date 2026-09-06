@@ -22,6 +22,7 @@ app.add_middleware(
         "http://localhost:5173",
         "https://els-precheck-frontend.vercel.app",
     ],
+    allow_origin_regex=r"https://els-precheck-frontend.*\.vercel\.app",
     allow_methods=["*"],
     allow_headers=["*"],
 )
