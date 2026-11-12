@@ -1,11 +1,13 @@
 """Claude API 연동 — PDF 추출 + 해설 생성"""
 from __future__ import annotations
 import base64
+import io
 import json
 import logging
 import os
 
 import anthropic
+from pypdf import PdfReader, PdfWriter
 
 from app.market_data import SUPPORTED_UNDERLYINGS, normalize_underlying
 
@@ -285,10 +287,91 @@ def _sanity_check(terms: dict, warnings: list[str]) -> None:
         warnings.append(f"인식되지 않은 기초자산이 있습니다. 확인해 주세요: {', '.join(unknown)}")
 
 
+_PAGE_KEYWORDS = [
+    "손익구조", "자동조기상환", "조기상환", "만기상환",
+    "기초자산", "낙인", "하한", "배리어", "쿠폰", "수익률",
+]
+_MAX_SELECTED_PAGES = 10
+_SCAN_MIN_CHARS = 30  # 이 글자수 미만이면 "텍스트 없는 쪽"으로 간주
+
+
+def _score_pages(reader: PdfReader) -> tuple[list[tuple[int, str]], bool]:
+    """각 쪽의 텍스트를 추출하고 핵심어 점수를 매긴다.
+    Returns ([(page_index, text), ...], is_scan_like)"""
+    page_texts: list[tuple[int, str]] = []
+    low_text_count = 0
+    for i, page in enumerate(reader.pages):
+        text = (page.extract_text() or "").strip()
+        page_texts.append((i, text))
+        if len(text) < _SCAN_MIN_CHARS:
+            low_text_count += 1
+    is_scan = low_text_count > len(reader.pages) * 0.5
+    return page_texts, is_scan
+
+
+def _select_pages(page_texts: list[tuple[int, str]], total: int, is_scan: bool) -> list[int]:
+    """핵심 쪽 번호(0-based) 목록을 반환한다."""
+    if is_scan:
+        return list(range(min(total, _MAX_SELECTED_PAGES)))
+
+    scores: list[tuple[int, int]] = []
+    for idx, text in page_texts:
+        score = sum(1 for kw in _PAGE_KEYWORDS if kw in text)
+        scores.append((idx, score))
+
+    # 점수 높은 쪽 우선, 같으면 앞쪽 우선
+    scores.sort(key=lambda x: (-x[1], x[0]))
+    top = {idx for idx, sc in scores if sc > 0}
+
+    # 앞뒤 1쪽씩 추가
+    with_neighbors: set[int] = set()
+    for idx in top:
+        for offset in (-1, 0, 1):
+            neighbor = idx + offset
+            if 0 <= neighbor < total:
+                with_neighbors.add(neighbor)
+
+    # 최대 _MAX_SELECTED_PAGES쪽, 쪽 순서 유지
+    selected = sorted(with_neighbors)[:_MAX_SELECTED_PAGES]
+
+    # 핵심어가 하나도 없으면 앞 10쪽
+    if not selected:
+        selected = list(range(min(total, _MAX_SELECTED_PAGES)))
+
+    return selected
+
+
+def _build_subset_pdf(reader: PdfReader, page_indices: list[int]) -> bytes:
+    """선택한 쪽만 담은 PDF를 메모리에서 생성한다."""
+    writer = PdfWriter()
+    for idx in page_indices:
+        writer.add_page(reader.pages[idx])
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
 def extract_from_pdf(pdf_bytes: bytes) -> dict:
     """PDF에서 ELS 조건 추출. 실패 시 ExtractionError 발생."""
+    # ---- 쪽 선별 ----
     try:
-        b64 = base64.standard_b64encode(pdf_bytes).decode()
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        total_pages = len(reader.pages)
+    except Exception as e:
+        raise ExtractionError("PDF를 읽을 수 없습니다.") from e
+
+    page_texts, is_scan = _score_pages(reader)
+    selected = _select_pages(page_texts, total_pages, is_scan)
+    source_pages = [i + 1 for i in selected]  # 1-based
+
+    if total_pages <= _MAX_SELECTED_PAGES:
+        pdf_for_api = pdf_bytes
+    else:
+        pdf_for_api = _build_subset_pdf(reader, selected)
+
+    # ---- Claude API 호출 ----
+    try:
+        b64 = base64.standard_b64encode(pdf_for_api).decode()
         msg = _get_client().messages.create(
             model=MODEL,
             max_tokens=1024,
@@ -314,6 +397,7 @@ def extract_from_pdf(pdf_bytes: bytes) -> dict:
     except StopIteration as e:
         raise ExtractionError("응답에서 추출 데이터를 찾을 수 없습니다.") from e
 
+    # ---- 응답 정규화 ----
     try:
         confidence = result.get("confidence")
         result["confidence"] = confidence if isinstance(confidence, dict) else {}
@@ -323,7 +407,6 @@ def extract_from_pdf(pdf_bytes: bytes) -> dict:
         els_terms = result.get("els_terms")
         if not isinstance(els_terms, dict):
             raise ExtractionError("ELS 조건을 추출할 수 없는 문서입니다.")
-        # Claude가 confidence/warnings를 els_terms 안에 중첩 반환하는 경우 정규화
         if "els_terms" in els_terms:
             result["confidence"] = els_terms.get("confidence", result["confidence"])
             result["warnings"] = els_terms.get("warnings", result["warnings"])
@@ -338,5 +421,15 @@ def extract_from_pdf(pdf_bytes: bytes) -> dict:
         raise
     except Exception as e:
         raise ExtractionError("ELS 조건을 추출할 수 없는 문서입니다.") from e
+
+    # ---- 메타 정보 추가 ----
+    result["source_pages"] = source_pages
+    result["total_pages"] = total_pages
+
+    if is_scan:
+        result["warnings"].append(
+            "텍스트가 거의 없는 스캔 문서로 판단되어 앞 쪽만 분석했습니다. "
+            "추출 결과를 반드시 확인해 주세요."
+        )
 
     return result
