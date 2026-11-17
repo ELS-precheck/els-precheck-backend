@@ -10,16 +10,12 @@ import anthropic
 from pypdf import PdfReader, PdfWriter
 
 from app.market_data import SUPPORTED_UNDERLYINGS, normalize_underlying
+from app.output_check import check_explanation
 
 logger = logging.getLogger(__name__)
 
 _client: anthropic.Anthropic | None = None
 MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
-
-_PROHIBITED = [
-    "지금이 적기", "추천합니다", "권유합니다", "권유드립니다",
-    "가입하세요", "투자하세요", "매수하세요", "매도하세요",
-]
 
 
 def _get_client() -> anthropic.Anthropic:
@@ -35,55 +31,6 @@ class LLMError(Exception):
 
 class ExtractionError(Exception):
     pass
-
-
-_FALLBACK_SUMMARY = "진단 수치를 바탕으로 이 상품의 위험 구조를 확인하세요."
-_FALLBACK_EXPLANATION = "진단 수치를 바탕으로 위험 구조를 직접 확인해 주세요."
-
-
-def _as_list(v) -> list[str]:
-    if isinstance(v, list):
-        return [s for s in v if isinstance(s, str)]
-    if isinstance(v, str):
-        return [v]
-    return []
-
-
-def _find_keyword(text: str) -> str | None:
-    if not isinstance(text, str):
-        return None
-    return next((k for k in _PROHIBITED if k in text), None)
-
-
-def _filter_prohibited(data: dict) -> dict:
-    """권유 표현 필터. 위반 내용은 제거하거나 폴백으로 교체하고 로그를 남긴다."""
-    # summary_line: 단일 문장 → 위반 시 폴백으로 교체
-    kw = _find_keyword(data.get("summary_line", ""))
-    if kw:
-        logger.warning("권유 표현 감지 [summary_line]: keyword=%s", kw)
-        data["summary_line"] = _FALLBACK_SUMMARY
-
-    # explanation: 위반 문장만 drop 후 join (스키마상 배열로 받음)
-    clean_exp = []
-    for sentence in _as_list(data.get("explanation")):
-        kw = _find_keyword(sentence)
-        if kw:
-            logger.warning("권유 표현 감지 [explanation]: keyword=%s", kw)
-        else:
-            clean_exp.append(sentence)
-    data["explanation"] = " ".join(clean_exp).strip() or _FALLBACK_EXPLANATION
-
-    # cautions: 위반 항목만 drop
-    clean_cautions = []
-    for c in _as_list(data.get("cautions")):
-        kw = _find_keyword(c)
-        if kw:
-            logger.warning("권유 표현 감지 [cautions]: keyword=%s", kw)
-        else:
-            clean_cautions.append(c)
-    data["cautions"] = clean_cautions
-
-    return data
 
 
 _EXPLAIN_SYSTEM = (
@@ -146,8 +93,9 @@ def _user_desc(user_profile: dict | None) -> str:
 
 def generate_explanation(els_terms: dict, diagnosis: dict, user_profile: dict | None) -> dict:
     """진단 결과 해설 생성. LLM 오류 시 LLMError 발생."""
+    user_desc = _user_desc(user_profile)
     prompt = _EXPLAIN_PROMPT_TMPL.format(
-        user_desc=_user_desc(user_profile),
+        user_desc=user_desc,
         els_terms_json=json.dumps(els_terms, ensure_ascii=False, indent=2),
         diagnosis_json=json.dumps(diagnosis, ensure_ascii=False, indent=2),
     )
@@ -168,8 +116,8 @@ def generate_explanation(els_terms: dict, diagnosis: dict, user_profile: dict | 
     except StopIteration as e:
         raise LLMError("응답에서 해설 데이터를 찾을 수 없습니다.") from e
 
-    result.setdefault("disclaimer", "본 해설은 투자권유가 아니라 정보 제공입니다.")
-    return _filter_prohibited(result)
+    # 출력 검사: 권유 표현·근거 없는 수치·면책 문구 (app/output_check.py)
+    return check_explanation(result, els_terms, diagnosis, user_desc)
 
 
 # ---------- PDF 추출 ----------
