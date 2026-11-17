@@ -2,8 +2,12 @@
 import copy
 
 from app.output_check import (
-    DEFAULT_DISCLAIMER, FALLBACK_EXPLANATION, FALLBACK_SUMMARY,
-    check_explanation, find_unsupported_number, build_allowed_numbers,
+    DEFAULT_DISCLAIMER,
+    FALLBACK_EXPLANATION,
+    FALLBACK_SUMMARY,
+    build_allowed_numbers,
+    check_explanation,
+    find_unsupported_number,
 )
 
 # 포트폴리오 5쪽 예시 상품 (KOSPI200, 쿠폰 11.5%, 3년, 6개월 평가, 낙인 35%)
@@ -132,4 +136,35 @@ def test_percent_must_match_percent_values():
         assert find_unsupported_number(text, allowed) is not None, text
     for text in ["배리어는 85%에서 70%까지 낮아집니다.", "낙인 35%", "하위 5% 구간",
                  "원금의 100%", "CVaR(95%)", "코스피200 지수", "0.5년"]:
+        assert find_unsupported_number(text, allowed) is None, text
+
+
+def test_mixed_units_are_not_read_as_small_numbers():
+    # "1천억"을 1로 읽어 회차 1과 맞춰 통과시키면 안 됨
+    allowed = build_allowed_numbers(ELS_TERMS, DIAGNOSIS, USER_DESC)
+    assert find_unsupported_number("원금은 1천억 원입니다.", allowed) is not None
+    assert find_unsupported_number("원금은 1,000만 원입니다.", allowed) is None
+    assert find_unsupported_number("기대수익은 52만 5천 원입니다.", allowed) is None
+
+
+def test_compound_amount_is_summed():
+    terms = dict(ELS_TERMS, principal=150_000_000)
+    diag = dict(DIAGNOSIS, principal=150_000_000, expected_return_amount=7_875_000)
+    allowed = build_allowed_numbers(terms, diag, USER_DESC)
+    assert find_unsupported_number("원금은 1억 5,000만 원입니다.", allowed) is None
+    assert find_unsupported_number("기대수익은 약 787만 5천 원입니다.", allowed) is None
+    assert find_unsupported_number("원금은 1억 6,000만 원입니다.", allowed) is not None
+
+
+def test_index_name_must_match_input_underlying():
+    allowed = build_allowed_numbers(ELS_TERMS, DIAGNOSIS, USER_DESC)
+    assert find_unsupported_number("기초자산은 KOSPI200입니다.", allowed) is None
+    assert find_unsupported_number("기초자산은 KOSPI999입니다.", allowed) == "KOSPI999"
+    assert find_unsupported_number("S&P500 지수와 비교하면", allowed) == "S&P500"
+
+
+def test_korean_words_starting_with_unit_letters():
+    # 만기·조건·조기상환의 '만/조'를 금액 단위로 읽지 않음
+    allowed = build_allowed_numbers(ELS_TERMS, DIAGNOSIS, USER_DESC)
+    for text in ["36 만기 구조입니다.", "85% 조건을 충족하면", "6 조기상환 평가"]:
         assert find_unsupported_number(text, allowed) is None, text

@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from decimal import Decimal
+
+from app.market_data import normalize_underlying
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +37,25 @@ _FIXED_NUMBERS = (5, 95, 100)
 # 해설 인용 대상이 아닌 진단 응답 항목 (분포 막대·실행 메타 정보)
 _SKIP_KEYS = {"return_distribution", "meta"}
 
-# 숫자 + 선택적 소수부 + 선택적 '만/억' 단위.
-# 영문자·숫자 바로 뒤에 붙은 숫자(KOSPI200 등 지수명)는 별도로 허용 목록에 넣는다.
-_NUM_RE = re.compile(
-    r"(?<![A-Za-z0-9.,])(-?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?\s*(만|억)?\s*(%|퍼센트)?")
-_UNIT = {"만": 10_000, "억": 100_000_000}
+# 숫자 한 덩어리: 숫자 + 선택적 소수부 + 선택적 작은 단위(천·백·십) + 선택적 큰 단위(조·억·만) + 선택적 %.
+# "1억 5,000만", "52만 5천"처럼 큰 단위로 이어지는 덩어리는 합쳐서 한 금액으로 본다.
+# 큰 단위 글자로 시작하는 낱말(조건·조기·만기·만큼 등)은 단위로 읽지 않는다.
+# 영문자 바로 뒤에 붙은 숫자(KOSPI200 등)는 _TICKER_RE로 지수명 전체를 따로 검사한다.
+_SEG_RE = re.compile(
+    r"(?<![A-Za-z0-9.,])(-?)(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?"
+    r"\s*(천|백(?!분)|십)?"
+    r"\s*(조(?!건|기|정|사|합)|억(?!제)|만(?!기|큼|약|일|족|료|들|나|에|으|이))?"
+    r"\s*(%|퍼센트)?")
+_SMALL = {"천": 1_000, "백": 100, "십": 10}
+_BIG = {"조": 10 ** 12, "억": 10 ** 8, "만": 10 ** 4}
+_TICKER_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z&]*\d+(?:\.\d+)?")
+
+
+@dataclass(frozen=True)
+class Allowed:
+    percent: list[float]   # %로 쓴 숫자와 비교할 값
+    plain: list[float]     # 그 밖의 숫자와 비교할 값
+    names: frozenset[str]  # 입력 기초자산의 표준명 (KOSPI200 등)
 
 
 def _as_list(v) -> list[str]:
@@ -66,9 +83,8 @@ def _collect_numbers(obj, out: list[float]) -> None:
             _collect_numbers(v, out)
 
 
-def build_allowed_numbers(els_terms: dict, diagnosis: dict,
-                          user_desc: str = "") -> tuple[list[float], list[float]]:
-    """해설에 등장해도 되는 수치: (퍼센트로 쓴 수치용, 그 밖의 수치용)."""
+def build_allowed_numbers(els_terms: dict, diagnosis: dict, user_desc: str = "") -> Allowed:
+    """해설에 등장해도 되는 수치와 기초자산 이름."""
     base: list[float] = []
     _collect_numbers(els_terms, base)
     _collect_numbers(diagnosis, base)
@@ -94,29 +110,55 @@ def build_allowed_numbers(els_terms: dict, diagnosis: dict,
     percent = _with_abs([x * 100 for x in base if abs(x) <= 3] + list(_FIXED_NUMBERS))
     # 그 밖의 표기: 개월·년·회차·금액·지수명 숫자 등. 소수 비율값(0.0602)은 그대로 쓰지 않으므로 제외
     plain = _with_abs([x for x in base if not (abs(x) <= 3 and x != int(x))] + derived)
-    return percent, sorted(set(plain) | set(percent))
+    names = frozenset(normalize_underlying(u) for u in (els_terms.get("underlyings") or [])
+                      if isinstance(u, str))
+    return Allowed(percent, sorted(set(plain) | set(percent)), names)
 
 
-def _parse(match: re.Match) -> tuple[float, float, bool]:
-    """매치 → (값, 허용 오차, 퍼센트 여부). 오차는 표기된 자릿수에서 반올림했을 때의 범위."""
-    sign, int_part, frac, unit, pct = match.groups()
+def _segment(m: re.Match) -> tuple[float, float, int, bool]:
+    """덩어리 하나 → (값, 반올림 허용 오차, 큰 단위 크기, 퍼센트 여부)."""
+    sign, int_part, frac, small, big, pct = m.groups()
     decimals = len(frac) - 1 if frac else 0
-    value = float(Decimal(sign + int_part.replace(",", "") + (frac or "")))
-    mult = _UNIT.get(unit, 1)
-    tol = 0.5 * (10 ** -decimals) * mult + 1e-9
-    return value * mult, tol, pct is not None
+    mult = _SMALL.get(small, 1) * _BIG.get(big, 1)
+    value = float(Decimal(sign + int_part.replace(",", "") + (frac or ""))) * mult
+    tol = 0.5 * (10 ** -decimals) * mult
+    return value, tol, _BIG.get(big, 1), pct is not None
 
 
-def find_unsupported_number(text: str, allowed: tuple[list[float], list[float]]) -> str | None:
-    """근거 없는 수치가 있으면 그 표기를, 없으면 None을 돌려준다."""
+def _quantities(text: str):
+    """문장 속 수량을 (표기, 값, 허용 오차, 퍼센트 여부)로 돌려준다. 이어진 금액 단위는 합친다."""
+    matches = [m for m in _SEG_RE.finditer(text) if m.group(0).strip()]
+    i = 0
+    while i < len(matches):
+        m = matches[i]
+        value, tol, big, is_pct = _segment(m)
+        start, end = m.start(), m.end()
+        # "1억 5,000만", "52만 5천": 큰 단위 뒤에 더 작은 단위의 덩어리가 공백만 두고 이어지면 합친다
+        while (not is_pct and big > 1 and i + 1 < len(matches)
+               and not text[end:matches[i + 1].start()].strip()):
+            nxt = matches[i + 1]
+            n_value, n_tol, n_big, n_pct = _segment(nxt)
+            if n_pct or nxt.group(1) or n_big >= big:
+                break
+            value, tol, big, end = value + n_value, n_tol, n_big, nxt.end()
+            i += 1
+        yield text[start:end].strip(), value, tol + 1e-9, is_pct
+        i += 1
+
+
+def find_unsupported_number(text: str, allowed: Allowed) -> str | None:
+    """근거 없는 수치나 입력에 없는 지수명이 있으면 그 표기를, 없으면 None을 돌려준다."""
     if not isinstance(text, str):
         return None
-    percent, plain = allowed
-    for m in _NUM_RE.finditer(text.replace("−", "-")):
-        value, tol, is_pct = _parse(m)
-        pool = percent if is_pct else plain
+    text = text.replace("−", "-")
+    # 영문자에 붙은 숫자(KOSPI200, S&P500)는 지수명 전체가 입력 기초자산과 같아야 통과
+    for t in _TICKER_RE.finditer(text):
+        if normalize_underlying(t.group(0)) not in allowed.names:
+            return t.group(0)
+    for shown, value, tol, is_pct in _quantities(text):
+        pool = allowed.percent if is_pct else allowed.plain
         if not any(abs(a - value) <= tol for a in pool):
-            return m.group(0).strip()
+            return shown
     return None
 
 
@@ -126,7 +168,7 @@ def find_prohibited(text: str) -> str | None:
     return next((k for k in PROHIBITED if k in text), None)
 
 
-def _violation(text: str, allowed) -> str | None:
+def _violation(text: str, allowed: Allowed) -> str | None:
     kw = find_prohibited(text)
     if kw:
         return f"권유 표현 '{kw}'"
